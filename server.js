@@ -25,6 +25,12 @@ function setupSSE(res) {
   res.flushHeaders();
 
   const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+
+  // Send a comment ping every 15 s so Railway's proxy never closes the
+  // connection during silent polling periods (default proxy_read_timeout).
+  const heartbeat = setInterval(() => res.write(': ping\n\n'), 15_000);
+  res.on('close', () => clearInterval(heartbeat));
+
   return send;
 }
 
