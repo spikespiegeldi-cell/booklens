@@ -25,6 +25,7 @@ const TRANSLATIONS = {
     mindMapTitle: 'Mind Map',
     exportBtn: 'Download Summary as PDF',
     exportingBtn: 'Generating PDF…',
+    downloadServerPdf: 'Download Saved PDF',
     author: 'Author',
     unknownAuthor: 'Unknown Author',
     errorTitle: 'Something went wrong',
@@ -59,6 +60,7 @@ const TRANSLATIONS = {
     mindMapTitle: '思维导图',
     exportBtn: '下载 PDF 摘要',
     exportingBtn: '正在生成 PDF…',
+    downloadServerPdf: '下载已保存的 PDF',
     author: '作者',
     unknownAuthor: '未知作者',
     errorTitle: '出现错误',
@@ -780,8 +782,8 @@ function ResultsSection({ results, language, t }) {
         </div>
       )}
 
-      {/* Export button */}
-      <div className="mt-8 flex justify-center">
+      {/* Export buttons */}
+      <div className="mt-8 flex flex-wrap justify-center gap-3">
         <button
           className="btn-primary flex items-center gap-2 px-6 py-3 text-base"
           onClick={handleExport}
@@ -792,6 +794,19 @@ function ResultsSection({ results, language, t }) {
           </svg>
           {exporting ? t('exportingBtn') : t('exportBtn')}
         </button>
+        {results.pdfFilename && (
+          <a
+            href={`/api/download/${encodeURIComponent(results.pdfFilename)}`}
+            download={results.pdfFilename}
+            className="btn-primary flex items-center gap-2 px-6 py-3 text-base"
+            style={{ textDecoration: 'none' }}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            {t('downloadServerPdf')}
+          </a>
+        )}
       </div>
     </div>
   );

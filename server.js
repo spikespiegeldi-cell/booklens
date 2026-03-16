@@ -4,6 +4,7 @@ const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const fetch = require('node-fetch');
 const pdfParse = require('pdf-parse');
 const { initClient, generateBookSummary, splitIntoChapters } = require('./summarizer');
@@ -138,6 +139,23 @@ app.post('/api/upload', upload.single('pdf'), async (req, res) => {
     send({ type: 'error', message: err.message || 'An error occurred.' });
     res.end();
   }
+});
+
+// ─── PDF Download ────────────────────────────────────────────────────────────
+app.get('/api/download/:filename', (req, res) => {
+  const { filename } = req.params;
+  // Validate: only allow filenames matching the pattern saveSummaryPDF generates.
+  // Rejects any path traversal attempts (slashes, dots before extension, etc.).
+  if (!/^[\w\u4e00-\u9fa5-]+-[0-9a-f]{8}\.pdf$/.test(filename)) {
+    return res.status(400).json({ error: 'Invalid filename.' });
+  }
+  const filePath = path.join(__dirname, 'summaries', filename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'File not found.' });
+  }
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  fs.createReadStream(filePath).pipe(res);
 });
 
 // ─── Claude readiness gate ───────────────────────────────────────────────────
