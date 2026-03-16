@@ -229,7 +229,8 @@ function buildSummaryHTML(result, language) {
 
   return `<!DOCTYPE html><html lang="${isZh ? 'zh-CN' : 'en'}"><head><meta charset="UTF-8"/>
 <style>
-  body{font-family:'WenQuanYi Zen Hei','Liberation Serif',Georgia,serif;font-size:11pt;line-height:1.65;color:#1c1917;margin:0;padding:0}
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=swap');
+  body{font-family:'Noto Sans SC','WenQuanYi Zen Hei','Liberation Serif',Georgia,serif;font-size:11pt;line-height:1.65;color:#1c1917;margin:0;padding:0}
   .wrap{padding:18mm 16mm}
   .hdr{border-bottom:2px solid #d97706;padding-bottom:10px;margin-bottom:22px}
   .hdr h1{font-size:24pt;font-weight:bold;color:#92400e;margin:0 0 5px}
@@ -279,7 +280,7 @@ async function saveSummaryPDF(result, language) {
 
   const page = await _client.browser.newPage();
   try {
-    await page.setContent(buildSummaryHTML(result, language), { waitUntil: 'load' });
+    await page.setContent(buildSummaryHTML(result, language), { waitUntil: 'networkidle2' });
     const buf = await page.pdf({ format: 'A4', printBackground: true });
     fs.writeFileSync(filePath, buf);
   } finally {
