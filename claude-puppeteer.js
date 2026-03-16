@@ -238,13 +238,12 @@ class ClaudePuppeteer {
   // ─── core send ─────────────────────────────────────────────────────────────
 
   async _doSendMessage(prompt, onProgress) {
-    // Open a fresh page for every call so the previous response's DOM
-    // (which can be 20K+ chars) is unloaded before we start the next call.
-    // This prevents Chrome OOM in the low-memory Railway container.
-    try { await this.page.close(); } catch { /* already gone */ }
-    this.page = await this._newPage(this.browser);
-    await this._loadCookies(this.page);
     const page = this.page;
+
+    // Navigate to about:blank first to unload the previous response DOM
+    // (which can be 20K+ chars), freeing memory before loading the next chat.
+    // We reuse the same page so the SPA session/auth state is preserved.
+    try { await page.goto('about:blank', { timeout: 5000 }); } catch { /* ignore */ }
 
     await page.goto(`${CLAUDE_URL}/new`, { waitUntil: 'networkidle2', timeout: 30000 });
     await this._sleep(1500);
