@@ -229,7 +229,7 @@ function buildSummaryHTML(result, language) {
 
   return `<!DOCTYPE html><html lang="${isZh ? 'zh-CN' : 'en'}"><head><meta charset="UTF-8"/>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=block');
   body{font-family:'Noto Sans SC','WenQuanYi Zen Hei','Liberation Serif',Georgia,serif;font-size:11pt;line-height:1.65;color:#1c1917;margin:0;padding:0}
   .wrap{padding:18mm 16mm}
   .hdr{border-bottom:2px solid #d97706;padding-bottom:10px;margin-bottom:22px}
@@ -280,7 +280,10 @@ async function saveSummaryPDF(result, language) {
 
   const page = await _client.browser.newPage();
   try {
-    await page.setContent(buildSummaryHTML(result, language), { waitUntil: 'networkidle2' });
+    // networkidle0: wait until ALL network requests finish (including WOFF2 font files).
+    // document.fonts.ready: ensure the font-face swap has completed before rendering.
+    await page.setContent(buildSummaryHTML(result, language), { waitUntil: 'networkidle0', timeout: 30000 });
+    await page.evaluate(() => document.fonts.ready);
     const buf = await page.pdf({ format: 'A4', printBackground: true });
     fs.writeFileSync(filePath, buf);
   } finally {

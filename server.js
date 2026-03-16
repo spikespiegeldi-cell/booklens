@@ -83,6 +83,12 @@ app.post('/api/summarize', async (req, res) => {
     send({ type: 'status', message: 'Looking up book on Open Library…' });
     const bookInfo = await lookupBook(query.trim());
 
+    // Open Library sometimes returns an adaptation/variant as the first hit
+    // (e.g. "1984 (adaptation)" for "1984"). Always use the user's exact query
+    // as the canonical title so Claude summarises the right book.
+    const isISBN = /^[\d\-X]{10,17}$/.test(query.trim().replace(/\s/g, ''));
+    if (!isISBN) bookInfo.title = query.trim();
+
     send({ type: 'status', message: `Found: "${bookInfo.title}" — generating summaries…` });
 
     const result = await generateBookSummary(bookInfo, null, language, (msg) => {
