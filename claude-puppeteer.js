@@ -33,6 +33,14 @@ class ClaudePuppeteer {
         '--disable-blink-features=AutomationControlled',
         '--disable-dev-shm-usage',
         '--window-size=1280,800',
+        // Low-memory flags for Docker / Railway (512 MB container)
+        '--no-zygote',
+        '--disable-gpu',
+        '--single-process',
+        '--disable-extensions',
+        '--disable-background-networking',
+        '--disable-default-apps',
+        '--mute-audio',
       ],
       defaultViewport: { width: 1280, height: 800 },
     });
