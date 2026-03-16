@@ -36,7 +36,6 @@ class ClaudePuppeteer {
         // Low-memory flags for Docker / Railway (512 MB container)
         '--no-zygote',
         '--disable-gpu',
-        '--single-process',
         '--disable-extensions',
         '--disable-background-networking',
         '--disable-default-apps',
@@ -239,6 +238,12 @@ class ClaudePuppeteer {
   // ─── core send ─────────────────────────────────────────────────────────────
 
   async _doSendMessage(prompt, onProgress) {
+    // Open a fresh page for every call so the previous response's DOM
+    // (which can be 20K+ chars) is unloaded before we start the next call.
+    // This prevents Chrome OOM in the low-memory Railway container.
+    try { await this.page.close(); } catch { /* already gone */ }
+    this.page = await this._newPage(this.browser);
+    await this._loadCookies(this.page);
     const page = this.page;
 
     await page.goto(`${CLAUDE_URL}/new`, { waitUntil: 'networkidle2', timeout: 30000 });
