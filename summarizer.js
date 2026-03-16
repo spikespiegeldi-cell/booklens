@@ -2,6 +2,7 @@
 const fs     = require('fs');
 const path   = require('path');
 const crypto = require('crypto');
+const http   = require('http');
 const ClaudePuppeteer = require('./claude-puppeteer');
 
 const SUMMARIES_DIR = path.join(__dirname, 'summaries');
@@ -278,16 +279,29 @@ async function saveSummaryPDF(result, language) {
 
   if (!_client || !_client.browser) throw new Error('Browser not available for PDF generation');
 
+  // Serve the HTML via a temporary local HTTP server so Google Fonts @import
+  // loads from a real HTTP origin. page.setContent() puts the page on
+  // about:blank (null origin) where Chromium defers/drops CJK WOFF2 downloads,
+  // causing Chinese characters to fall back to a broken system font in the PDF.
+  const html = buildSummaryHTML(result, language);
+  const srv  = http.createServer((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(html, 'utf8');
+  });
+  await new Promise(resolve => srv.listen(0, '127.0.0.1', resolve));
+  const { port } = srv.address();
+
   const page = await _client.browser.newPage();
   try {
-    // networkidle0: wait until ALL network requests finish (including WOFF2 font files).
-    // document.fonts.ready: ensure the font-face swap has completed before rendering.
-    await page.setContent(buildSummaryHTML(result, language), { waitUntil: 'networkidle0', timeout: 30000 });
+    // networkidle0 waits for ALL requests (Google Fonts CSS + every CJK WOFF2 subset).
+    // document.fonts.ready confirms every @font-face swap has completed.
+    await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle0', timeout: 60000 });
     await page.evaluate(() => document.fonts.ready);
     const buf = await page.pdf({ format: 'A4', printBackground: true });
     fs.writeFileSync(filePath, buf);
   } finally {
     await page.close().catch(() => {});
+    await new Promise(resolve => srv.close(resolve));
   }
   return filename;
 }
