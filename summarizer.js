@@ -293,10 +293,15 @@ async function saveSummaryPDF(result, language) {
 
   const page = await _client.browser.newPage();
   try {
-    // networkidle0 waits for ALL requests (Google Fonts CSS + every CJK WOFF2 subset).
-    // document.fonts.ready confirms every @font-face swap has completed.
-    await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle0', timeout: 60000 });
-    await page.evaluate(() => document.fonts.ready);
+    // 'load' fires after all stylesheets (incl. Google Fonts CSS @import) are parsed
+    // and @font-face rules are registered. Then document.fonts.ready waits for every
+    // CJK WOFF2 subset file to finish downloading and be applied to the text.
+    // 20s race-timeout prevents hanging if a font shard is slow or unreachable.
+    await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load', timeout: 30000 });
+    await page.evaluate(() => Promise.race([
+      document.fonts.ready,
+      new Promise(r => setTimeout(r, 20000)),
+    ]));
     const buf = await page.pdf({ format: 'A4', printBackground: true });
     fs.writeFileSync(filePath, buf);
   } finally {
