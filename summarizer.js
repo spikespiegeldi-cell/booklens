@@ -177,22 +177,29 @@ async function generateBookSummary(bookInfo, chapters, language, onProgress) {
 
   // ── ISBN/title path ───────────────────────────────────────────────────────
   if (!fromPDF) {
-    send('Asking Claude for all chapter summaries...');
-    // NOTE: all prompt endings use plain ASCII (no en/em dashes) so that
-    // prompt.slice(-60) stays ASCII-safe for the Puppeteer tail-search.
-    // Capped at 10 chapters to stay within Claude output token budget.
+    send('Asking Claude for chapter summaries and mind map...');
+    // Single call returns chapters + mind map to avoid rate-limiting between requests.
+    // NOTE: all prompt endings use plain ASCII so prompt.slice(-60) is ASCII-safe.
     const batchPrompt =
       `The book "${bookTitle}" by ${bookAuthor} is a well-known work. ` +
       (bookDescription ? `Here is a description: ${bookDescription}\n\n` : '') +
-      `Return a JSON array of the most important chapters (up to 10). Each element must have: ` +
-      `{ "number": <int>, "title": <string>, "summary": <120 word prose summary>, ` +
-      `"takeaways": <array of exactly 5 strings each under 25 words>, ` +
-      `"concepts": <array of exactly 4 objects with keys "name" and "explanation" where explanation is under 35 words> }. ` +
+      `Return a single JSON object with exactly two keys: "chapters" and "mindMap". ` +
+      `"chapters" is an array of up to 8 of the most important chapters. Each chapter element: ` +
+      `{ "number": <int>, "title": <string>, "summary": <100 word prose>, ` +
+      `"takeaways": <array of 5 strings each under 20 words>, ` +
+      `"concepts": <array of 3 objects with keys "name" and "explanation" where explanation is under 30 words> }. ` +
+      `"mindMap" has this exact shape: ` +
+      `{ "title": "${bookTitle}", "themes": [{ "name": <string>, "chapters": [{ "name": <string>, "concepts": [<string>, ...] }] }] }. ` +
+      `Include 2-3 themes, group chapters under themes, 2-3 concepts per chapter in mindMap. ` +
       `Do not use double-quote characters inside any string value. ` +
       `Return ONLY valid JSON. No markdown fences. No extra text.`;
 
     const raw = await ask(batchPrompt, language, (m) => send(m));
-    const chapterList = safeParse(raw);
+    const parsed = safeParse(raw);
+
+    // Support both {chapters, mindMap} shape and bare array (graceful fallback)
+    const chapterList = Array.isArray(parsed) ? parsed : (parsed.chapters || []);
+    const mindMap = Array.isArray(parsed) ? null : (parsed.mindMap || null);
 
     const chapterResults = chapterList.map(c => ({
       title: `Chapter ${c.number}: ${c.title}`,
@@ -200,19 +207,6 @@ async function generateBookSummary(bookInfo, chapters, language, onProgress) {
       takeaways: Array.isArray(c.takeaways) ? c.takeaways : [],
       concepts: Array.isArray(c.concepts) ? c.concepts : [],
     }));
-
-    // ── Mind map ─────────────────────────────────────────────────────────────
-    send('Building mind map...');
-    // NOTE: "2-4" and "3-5" use plain hyphens (not en dashes) intentionally.
-    const mindMapPrompt =
-      `For the book "${bookTitle}" by ${bookAuthor}, generate a mind-map as JSON with this exact shape: ` +
-      `{"title":"${bookTitle}","themes":[{"name":"Theme Name","chapters":[{"name":"Chapter Name","concepts":["concept1","concept2","concept3"]}]}]} ` +
-      `Include 2-4 themes, group actual chapters under relevant themes, 3-5 concepts per chapter. ` +
-      `Do not use double-quote characters inside any string value. ` +
-      `Return ONLY valid JSON. No other text.`;
-
-    const mindMapRaw = await ask(mindMapPrompt, language, (m) => send(m));
-    const mindMap = safeParse(mindMapRaw);
 
     send('Done!');
     return { title: bookTitle, author: bookAuthor, chapters: chapterResults, mindMap };
@@ -242,17 +236,21 @@ async function generateBookSummary(bookInfo, chapters, language, onProgress) {
     });
   }
 
-  // ── Mind map ─────────────────────────────────────────────────────────────
+  // ── Mind map — built from extracted chapter data (no extra Claude call) ────
   send('Building mind map...');
-  const mindMapPrompt =
-    `For the book "${bookTitle}" by ${bookAuthor}, generate a mind-map as JSON with this exact shape: ` +
-    `{"title":"${bookTitle}","themes":[{"name":"Theme Name","chapters":[{"name":"Chapter Name","concepts":["concept1","concept2","concept3"]}]}]} ` +
-    `Include 2-4 themes, group actual chapters under relevant themes, 3-5 concepts per chapter. ` +
-    `Do not use double-quote characters inside any string value. ` +
-    `Return ONLY valid JSON. No other text.`;
-
-  const mindMapRaw = await ask(mindMapPrompt, language, (m) => send(m));
-  const mindMap = safeParse(mindMapRaw);
+  const themeSize = Math.ceil(chapterResults.length / 3);
+  const themes = [];
+  for (let i = 0; i < chapterResults.length; i += themeSize) {
+    const slice = chapterResults.slice(i, i + themeSize);
+    themes.push({
+      name: `Part ${themes.length + 1}`,
+      chapters: slice.map(ch => ({
+        name: ch.title,
+        concepts: ch.concepts.slice(0, 3).map(c => c.name || c),
+      })),
+    });
+  }
+  const mindMap = { title: bookTitle, themes };
 
   send('Done!');
   return { title: bookTitle, author: bookAuthor, chapters: chapterResults, mindMap };
