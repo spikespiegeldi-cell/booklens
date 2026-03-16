@@ -1,8 +1,8 @@
 'use strict';
-const fs     = require('fs');
-const path   = require('path');
-const crypto = require('crypto');
-const http   = require('http');
+const fs        = require('fs');
+const path      = require('path');
+const crypto    = require('crypto');
+const puppeteer = require('puppeteer');
 const ClaudePuppeteer = require('./claude-puppeteer');
 
 const SUMMARIES_DIR = path.join(__dirname, 'summaries');
@@ -230,8 +230,7 @@ function buildSummaryHTML(result, language) {
 
   return `<!DOCTYPE html><html lang="${isZh ? 'zh-CN' : 'en'}"><head><meta charset="UTF-8"/>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&display=block');
-  body{font-family:'Noto Sans SC','WenQuanYi Zen Hei','Liberation Serif',Georgia,serif;font-size:11pt;line-height:1.65;color:#1c1917;margin:0;padding:0}
+  body{font-family:'PingFang SC','Hiragino Sans GB','Microsoft YaHei','STHeiti','WenQuanYi Zen Hei','Liberation Serif',Georgia,serif;font-size:11pt;line-height:1.65;color:#1c1917;margin:0;padding:0}
   .wrap{padding:18mm 16mm}
   .hdr{border-bottom:2px solid #d97706;padding-bottom:10px;margin-bottom:22px}
   .hdr h1{font-size:24pt;font-weight:bold;color:#92400e;margin:0 0 5px}
@@ -277,36 +276,22 @@ async function saveSummaryPDF(result, language) {
   const filename = `${safeTitle}-${suffix}.pdf`;
   const filePath = path.join(SUMMARIES_DIR, filename);
 
-  if (!_client || !_client.browser) throw new Error('Browser not available for PDF generation');
-
-  // Serve the HTML via a temporary local HTTP server so Google Fonts @import
-  // loads from a real HTTP origin. page.setContent() puts the page on
-  // about:blank (null origin) where Chromium defers/drops CJK WOFF2 downloads,
-  // causing Chinese characters to fall back to a broken system font in the PDF.
   const html = buildSummaryHTML(result, language);
-  const srv  = http.createServer((_req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(html, 'utf8');
+  // Dedicated browser isolated from the claude.ai session so page.pdf() never
+  // competes with the SPA's print backend. Hard timeouts on every async step so
+  // a hung Chrome launch or printToPDF can never block the response forever.
+  const pdfBrowser = await puppeteer.launch({
+    headless: 'new',
+    timeout: 15000,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--no-zygote'],
   });
-  await new Promise(resolve => srv.listen(0, '127.0.0.1', resolve));
-  const { port } = srv.address();
-
-  const page = await _client.browser.newPage();
+  const page = await pdfBrowser.newPage();
   try {
-    // 'load' fires after all stylesheets (incl. Google Fonts CSS @import) are parsed
-    // and @font-face rules are registered. Then document.fonts.ready waits for every
-    // CJK WOFF2 subset file to finish downloading and be applied to the text.
-    // 20s race-timeout prevents hanging if a font shard is slow or unreachable.
-    await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load', timeout: 30000 });
-    await page.evaluate(() => Promise.race([
-      document.fonts.ready,
-      new Promise(r => setTimeout(r, 20000)),
-    ]));
-    const buf = await page.pdf({ format: 'A4', printBackground: true });
+    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 10000 });
+    const buf = await page.pdf({ format: 'A4', printBackground: true, timeout: 15000 });
     fs.writeFileSync(filePath, buf);
   } finally {
-    await page.close().catch(() => {});
-    await new Promise(resolve => srv.close(resolve));
+    await pdfBrowser.close().catch(() => {});
   }
   return filename;
 }
@@ -348,7 +333,7 @@ async function generateBookSummary(bookInfo, chapters, language, onProgress) {
     const mindMap = Array.isArray(parsed) ? null : (parsed.mindMap || null);
 
     const chapterResults = chapterList.map(c => ({
-      title: `Chapter ${c.number}: ${c.title}`,
+      title: language === 'zh' ? `第${c.number}章：${c.title}` : `Chapter ${c.number}: ${c.title}`,
       summary: c.summary,
       takeaways: Array.isArray(c.takeaways) ? c.takeaways : [],
       concepts: Array.isArray(c.concepts) ? c.concepts : [],
@@ -359,8 +344,9 @@ async function generateBookSummary(bookInfo, chapters, language, onProgress) {
     let pdfFilename = null;
     try {
       send('Saving PDF…');
-      pdfFilename = await saveSummaryPDF(result0, language);
-    } catch (e) { console.error('[BookLens] PDF save failed:', e.message); }
+      const _timeout = new Promise((_, r) => setTimeout(() => r(new Error('PDF timeout')), 30000));
+      pdfFilename = await Promise.race([saveSummaryPDF(result0, language), _timeout]);
+    } catch (e) { console.error('[BookLens] PDF save failed:', e.message); pdfFilename = null; }
     return { ...result0, pdfFilename };
   }
 
@@ -409,8 +395,9 @@ async function generateBookSummary(bookInfo, chapters, language, onProgress) {
   let pdfFilename = null;
   try {
     send('Saving PDF…');
-    pdfFilename = await saveSummaryPDF(result1, language);
-  } catch (e) { console.error('[BookLens] PDF save failed:', e.message); }
+    const _timeout = new Promise((_, r) => setTimeout(() => r(new Error('PDF timeout')), 30000));
+    pdfFilename = await Promise.race([saveSummaryPDF(result1, language), _timeout]);
+  } catch (e) { console.error('[BookLens] PDF save failed:', e.message); pdfFilename = null; }
   return { ...result1, pdfFilename };
 }
 

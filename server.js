@@ -160,7 +160,7 @@ app.get('/api/download/:filename', (req, res) => {
     return res.status(404).json({ error: 'File not found.' });
   }
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
   fs.createReadStream(filePath).pipe(res);
 });
 
