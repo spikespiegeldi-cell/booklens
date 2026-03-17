@@ -380,13 +380,7 @@ async function generateBookSummary(bookInfo, chapters, language, onProgress) {
 
     send('Done!');
     const result0 = { title: bookTitle, author: bookAuthor, chapters: chapterResults, mindMap };
-    let pdfFilename = null;
-    try {
-      send('Saving PDF…');
-      const _timeout = new Promise((_, r) => setTimeout(() => r(new Error('PDF timeout')), 30000));
-      pdfFilename = await Promise.race([saveSummaryPDF(result0, language), _timeout]);
-    } catch (e) { console.error('[BookLens] PDF save failed:', e.message); pdfFilename = null; }
-    return { ...result0, pdfFilename };
+    return { ...result0, pdfFilename: null };
   }
 
   // ── PDF path ──────────────────────────────────────────────────────────────
@@ -431,13 +425,7 @@ async function generateBookSummary(bookInfo, chapters, language, onProgress) {
 
   send('Done!');
   const result1 = { title: bookTitle, author: bookAuthor, chapters: chapterResults, mindMap };
-  let pdfFilename = null;
-  try {
-    send('Saving PDF…');
-    const _timeout = new Promise((_, r) => setTimeout(() => r(new Error('PDF timeout')), 30000));
-    pdfFilename = await Promise.race([saveSummaryPDF(result1, language), _timeout]);
-  } catch (e) { console.error('[BookLens] PDF save failed:', e.message); pdfFilename = null; }
-  return { ...result1, pdfFilename };
+  return { ...result1, pdfFilename: null };
 }
 
 module.exports = { initClient, generateBookSummary, splitIntoChapters, saveSummaryPDF };
