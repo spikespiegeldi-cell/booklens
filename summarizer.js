@@ -1,8 +1,7 @@
 'use strict';
-const fs        = require('fs');
-const path      = require('path');
-const crypto    = require('crypto');
-const puppeteer = require('puppeteer');
+const fs     = require('fs');
+const path   = require('path');
+const crypto = require('crypto');
 const ClaudePuppeteer = require('./claude-puppeteer');
 
 const SUMMARIES_DIR = path.join(__dirname, 'summaries');
@@ -276,22 +275,22 @@ async function saveSummaryPDF(result, language) {
   const filename = `${safeTitle}-${suffix}.pdf`;
   const filePath = path.join(SUMMARIES_DIR, filename);
 
+  if (!_client || !_client.browser) throw new Error('Browser not available for PDF generation');
+
   const html = buildSummaryHTML(result, language);
-  // Dedicated browser isolated from the claude.ai session so page.pdf() never
-  // competes with the SPA's print backend. Hard timeouts on every async step so
-  // a hung Chrome launch or printToPDF can never block the response forever.
-  const pdfBrowser = await puppeteer.launch({
-    headless: 'new',
-    timeout: 15000,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--no-zygote'],
-  });
-  const page = await pdfBrowser.newPage();
+  // Navigate the main claude.ai page to about:blank first so the heavy SPA DOM
+  // is unloaded and Chrome's single-threaded print backend is free before we
+  // call page.pdf(). This avoids the OOM / print-backend contention that occurs
+  // when launching a second browser process in a memory-constrained container.
+  try { await _client.page.goto('about:blank', { timeout: 5000 }); } catch { /* ignore */ }
+
+  const page = await _client.browser.newPage();
   try {
     await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 10000 });
     const buf = await page.pdf({ format: 'A4', printBackground: true, timeout: 15000 });
     fs.writeFileSync(filePath, buf);
   } finally {
-    await pdfBrowser.close().catch(() => {});
+    await page.close().catch(() => {});
   }
   return filename;
 }
