@@ -2,7 +2,7 @@
 const fs     = require('fs');
 const path   = require('path');
 const crypto = require('crypto');
-const puppeteer = require('puppeteer');
+const PDFDocument = require('pdfkit');
 const ClaudePuppeteer = require('./claude-puppeteer');
 
 const SUMMARIES_DIR = path.join(__dirname, 'summaries');
@@ -276,63 +276,62 @@ async function saveSummaryPDF(result, language) {
   const filename = `${safeTitle}-${suffix}.pdf`;
   const filePath = path.join(SUMMARIES_DIR, filename);
 
+  if (!_client || !_client.browser) throw new Error('Browser not available for PDF generation');
+
   const html = buildSummaryHTML(result, language);
 
-  // Navigate the main claude.ai page to about:blank to free memory before
-  // launching a dedicated PDF browser.
-  if (_client && _client.page) {
+  // Navigate the main claude.ai page to about:blank to free memory, then
+  // open a temporary page in the SAME browser (no second process = no OOM).
+  if (_client.page) {
     try { await _client.page.goto('about:blank', { timeout: 5000 }); } catch { /* ignore */ }
   }
 
-  // Launch a dedicated browser specifically for PDF generation.
-  // CRITICAL: use headless:'shell' (old/legacy headless = --headless=old).
-  // Puppeteer v22 defaults headless:'new' which uses Chrome's new headless
-  // renderer — on system apt Chromium on Linux this mode hangs indefinitely
-  // in Page.printToPDF and never resolves, even with a timeout param.
-  // headless:'shell' uses the legacy --headless flag that has rock-solid
-  // Page.printToPDF support on all Linux/Docker environments.
-  let pdfBrowser = null;
-  let pdfPage = null;
-
-  // Self-contained kill timer: if anything inside hangs, we force-close the
-  // browser after 20 s which makes all pending CDP promises reject immediately.
-  let killTimer = null;
-  const killPromise = new Promise((_, reject) => {
-    killTimer = setTimeout(() => {
-      console.error('[BookLens] PDF browser force-kill after 20 s hang');
-      if (pdfPage)    pdfPage.close().catch(() => {});
-      if (pdfBrowser) pdfBrowser.close().catch(() => {});
-      reject(new Error('PDF generation timed out (browser killed)'));
-    }, 20000);
-  });
-
-  async function doPDF() {
-    pdfBrowser = await puppeteer.launch({
-      headless: 'shell',
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-gpu',
-        '--no-zygote',
-        '--disable-dev-shm-usage',
-        '--disable-extensions',
-      ],
-      timeout: 10000,
-    });
-    pdfPage = await pdfBrowser.newPage();
-    await pdfPage.setContent(html, { waitUntil: 'domcontentloaded', timeout: 10000 });
-    const buf = await pdfPage.pdf({ format: 'A4', printBackground: true });
-    fs.writeFileSync(filePath, buf);
-    return filename;
-  }
-
+  const page = await _client.browser.newPage();
   try {
-    return await Promise.race([doPDF(), killPromise]);
+    // A4 viewport at 96 dpi: 794 × 1123 px
+    await page.setViewport({ width: 794, height: 1123, deviceScaleFactor: 1 });
+    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 10000 });
+
+    // Use page.screenshot() instead of page.pdf().
+    // page.screenshot() → CDP Page.captureScreenshot  — works reliably on ALL
+    // headless modes and all Linux/Docker environments.
+    // page.pdf()        → CDP Page.printToPDF         — hangs indefinitely on
+    // system Chromium (apt) with the new headless renderer used in Puppeteer v22.
+    const imgBuf = await page.screenshot({ type: 'png', fullPage: true });
+
+    // Read actual rendered height from PNG IHDR chunk (bytes 16-23)
+    const imgW = imgBuf.readUInt32BE(16);
+    const imgH = imgBuf.readUInt32BE(20);
+
+    // Assemble a multi-page PDF from the screenshot using pdfkit (image-only,
+    // no font dependencies — avoids all TTC/font-loading issues).
+    const A4_W = 595, A4_H = 842;   // A4 in points at 72 dpi
+    const scale  = A4_W / imgW;      // px → pt scaling factor
+    const scaledH = imgH * scale;
+    const numPages = Math.ceil(scaledH / A4_H);
+
+    await new Promise((resolve, reject) => {
+      const doc = new PDFDocument({ size: 'A4', margin: 0, autoFirstPage: false });
+      const stream = fs.createWriteStream(filePath);
+      stream.on('finish', resolve);
+      stream.on('error', reject);
+      doc.pipe(stream);
+
+      for (let i = 0; i < numPages; i++) {
+        doc.addPage({ size: [A4_W, A4_H], margin: 0 });
+        doc.save();
+        doc.rect(0, 0, A4_W, A4_H).clip();
+        // Position image so only the i-th A4-height slice is visible
+        doc.image(imgBuf, 0, -(i * A4_H), { width: A4_W });
+        doc.restore();
+      }
+
+      doc.end();
+    });
+
+    return filename;
   } finally {
-    clearTimeout(killTimer);
-    if (pdfPage)    await pdfPage.close().catch(() => {});
-    if (pdfBrowser) await pdfBrowser.close().catch(() => {});
+    await page.close().catch(() => {});
   }
 }
 
