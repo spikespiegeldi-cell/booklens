@@ -2,6 +2,7 @@
 const fs     = require('fs');
 const path   = require('path');
 const crypto = require('crypto');
+const puppeteer = require('puppeteer');
 const ClaudePuppeteer = require('./claude-puppeteer');
 
 const SUMMARIES_DIR = path.join(__dirname, 'summaries');
@@ -275,24 +276,64 @@ async function saveSummaryPDF(result, language) {
   const filename = `${safeTitle}-${suffix}.pdf`;
   const filePath = path.join(SUMMARIES_DIR, filename);
 
-  if (!_client || !_client.browser) throw new Error('Browser not available for PDF generation');
-
   const html = buildSummaryHTML(result, language);
-  // Navigate the main claude.ai page to about:blank first so the heavy SPA DOM
-  // is unloaded and Chrome's single-threaded print backend is free before we
-  // call page.pdf(). This avoids the OOM / print-backend contention that occurs
-  // when launching a second browser process in a memory-constrained container.
-  try { await _client.page.goto('about:blank', { timeout: 5000 }); } catch { /* ignore */ }
 
-  const page = await _client.browser.newPage();
-  try {
-    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 10000 });
-    const buf = await page.pdf({ format: 'A4', printBackground: true, timeout: 15000 });
-    fs.writeFileSync(filePath, buf);
-  } finally {
-    await page.close().catch(() => {});
+  // Navigate the main claude.ai page to about:blank to free memory before
+  // launching a dedicated PDF browser.
+  if (_client && _client.page) {
+    try { await _client.page.goto('about:blank', { timeout: 5000 }); } catch { /* ignore */ }
   }
-  return filename;
+
+  // Launch a dedicated browser specifically for PDF generation.
+  // CRITICAL: use headless:'shell' (old/legacy headless = --headless=old).
+  // Puppeteer v22 defaults headless:'new' which uses Chrome's new headless
+  // renderer — on system apt Chromium on Linux this mode hangs indefinitely
+  // in Page.printToPDF and never resolves, even with a timeout param.
+  // headless:'shell' uses the legacy --headless flag that has rock-solid
+  // Page.printToPDF support on all Linux/Docker environments.
+  let pdfBrowser = null;
+  let pdfPage = null;
+
+  // Self-contained kill timer: if anything inside hangs, we force-close the
+  // browser after 20 s which makes all pending CDP promises reject immediately.
+  let killTimer = null;
+  const killPromise = new Promise((_, reject) => {
+    killTimer = setTimeout(() => {
+      console.error('[BookLens] PDF browser force-kill after 20 s hang');
+      if (pdfPage)    pdfPage.close().catch(() => {});
+      if (pdfBrowser) pdfBrowser.close().catch(() => {});
+      reject(new Error('PDF generation timed out (browser killed)'));
+    }, 20000);
+  });
+
+  async function doPDF() {
+    pdfBrowser = await puppeteer.launch({
+      headless: 'shell',
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-gpu',
+        '--no-zygote',
+        '--disable-dev-shm-usage',
+        '--disable-extensions',
+      ],
+      timeout: 10000,
+    });
+    pdfPage = await pdfBrowser.newPage();
+    await pdfPage.setContent(html, { waitUntil: 'domcontentloaded', timeout: 10000 });
+    const buf = await pdfPage.pdf({ format: 'A4', printBackground: true });
+    fs.writeFileSync(filePath, buf);
+    return filename;
+  }
+
+  try {
+    return await Promise.race([doPDF(), killPromise]);
+  } finally {
+    clearTimeout(killTimer);
+    if (pdfPage)    await pdfPage.close().catch(() => {});
+    if (pdfBrowser) await pdfBrowser.close().catch(() => {});
+  }
 }
 
 // ─── main entry ─────────────────────────────────────────────────────────────
